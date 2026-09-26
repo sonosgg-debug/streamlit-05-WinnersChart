@@ -23,38 +23,107 @@ STANDARD_CHART_THEME = {
     'hover_border': '#334155'
 }
 
+# 한국거래소(KRX) 정규 휴장일 및 법정 공휴일 (2024~2027)
+KRX_HOLIDAYS = {
+    # 2024
+    '20240101', '20240209', '20240212', '20240301', '20240410', '20240501', '20240506',
+    '20240515', '20240606', '20240815', '20240916', '20240917', '20240918', '20241001',
+    '20241003', '20241009', '20241225', '20241231',
+    # 2025
+    '20250101', '20250128', '20250129', '20250130', '20250303', '20250501', '20250505',
+    '20250506', '20250606', '20250815', '20251003', '20251006', '20251007', '20251008',
+    '20251009', '20251225', '20251231',
+    # 2026
+    '20260101', '20260216', '20260217', '20260218', '20260302', '20260501', '20260505',
+    '20260525', '20260603', '20260606', '20260817', '20260924', '20260925', '20261005',
+    '20261009', '20261225', '20261231',
+    # 2027
+    '20270101', '20270208', '20270209', '20270210', '20270301', '20270503', '20270505',
+    '20270513', '20270607', '20270816', '20270914', '20270915', '20270916', '20271004',
+    '20271011', '20271225', '20271231'
+}
+
+# 미국 증시(NYSE/NASDAQ) 정규 휴장일 (2024~2027)
+US_HOLIDAYS = {
+    # 2024
+    '20240101', '20240115', '20240219', '20240329', '20240527', '20240619', '20240704', '20240902', '20241128', '20241225',
+    # 2025
+    '20250101', '20250120', '20250217', '20250418', '20250526', '20250619', '20250704', '20250901', '20251127', '20251225',
+    # 2026
+    '20260101', '20260119', '20260216', '20260403', '20260525', '20260619', '20260703', '20260907', '20261126', '20261225',
+    # 2027
+    '20270101', '20270118', '20270215', '20270326', '20270531', '20270618', '20270705', '20270906', '20271125', '20271224'
+}
+
+def is_krx_trading_day(date_val) -> bool:
+    """주어진 날짜가 한국거래소(KRX) 정규 거래일인지 판별합니다."""
+    clean_date = str(date_val).replace('-', '').strip()
+    try:
+        dt = datetime.datetime.strptime(clean_date, "%Y%m%d")
+        return (dt.weekday() < 5) and (clean_date not in KRX_HOLIDAYS)
+    except Exception:
+        return False
+
+def is_us_trading_day(date_val) -> bool:
+    """주어진 날짜가 미국 증시(NYSE/NASDAQ) 정규 거래일인지 판별합니다."""
+    clean_date = str(date_val).replace('-', '').strip()
+    try:
+        dt = datetime.datetime.strptime(clean_date, "%Y%m%d")
+        return (dt.weekday() < 5) and (clean_date not in US_HOLIDAYS)
+    except Exception:
+        return False
+
+def is_any_market_trading_day(date_val) -> bool:
+    """한국거래소 또는 미국 증시 중 최소 한 곳이라도 정규 개장한 날인지 판별합니다."""
+    return is_krx_trading_day(date_val) or is_us_trading_day(date_val)
+
 def get_latest_expected_trading_day(target_date: str = None) -> str:
     """
-    가장 최근 거래 완료된 실제 영업일 YYYY-MM-DD 반환.
-    - target_date가 전달된 경우: 해당 날짜 기준 (또는 직전 영업일)
-    - target_date가 없는 경우: KST 기준 15:45 이전이거나 오늘이 주말/새벽이면 직전 마감 거래일 반환
+    서버 OS 타임존과 무관하게 한국 표준시(KST, UTC+9)를 기준으로
+    한국 또는 미국 증시 중 최소 한 곳이라도 공식 마감 종가가 확정된 최신 영업일 YYYY-MM-DD 반환.
+    - target_date 지정 시: 해당 날짜 이하에서 양국 중 최소 한 곳 개장한 최신 거래일로 자동 보정
+    - target_date 미지정 시:
+        1) 오늘이 한국 거래일이고 15:45 이후이면 오늘 종가 채택
+        2) 그 외에는 어제(또는 그 이전) 중 한국 또는 미국 시장이 마감 완료된 최신 거래일 반환
+           (미국 거래일 공식 마감은 KST 익일 06:00 이후 확정)
     """
-    from datetime import datetime, timezone, timedelta
-    now_kst = datetime.now(timezone(timedelta(hours=9)))
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    now_kst = now_utc + datetime.timedelta(hours=9)
+    today = now_kst.date()
+
     if target_date:
-        try:
-            clean_date = str(target_date).replace('-', '')
-            dt = datetime.strptime(clean_date, "%Y%m%d").replace(tzinfo=timezone(timedelta(hours=9)))
-        except Exception:
-            dt = now_kst
-    else:
-        dt = now_kst
+        if isinstance(target_date, str):
+            clean_date = target_date.replace('-', '').strip()
+            dt = datetime.datetime.strptime(clean_date, "%Y%m%d").date()
+        elif isinstance(target_date, datetime.date):
+            dt = target_date
+        else:
+            dt = today
+        for _ in range(60):
+            if is_any_market_trading_day(dt):
+                return dt.strftime("%Y-%m-%d")
+            dt -= datetime.timedelta(days=1)
+        return today.strftime("%Y-%m-%d")
 
-    # 평일 15:45 이후에만 당일 종가 확정
-    if dt.weekday() < 5 and (dt.hour > 15 or (dt.hour == 15 and dt.minute >= 45)):
-        return dt.strftime("%Y-%m-%d")
+    # 1. 오늘이 한국 정규 거래일이고 15:45 이후(장 마감)인 경우 오늘 반환
+    if (now_kst.hour > 15 or (now_kst.hour == 15 and now_kst.minute >= 45)) and is_krx_trading_day(today):
+        return today.strftime("%Y-%m-%d")
 
-    # 장전, 새벽, 주말: 직전 마감 거래일 산출
-    if dt.weekday() == 0:    # 월요일 장전 -> 지난주 금요일 (3일 전)
-        days_back = 3
-    elif dt.weekday() == 6:  # 일요일 -> 지난주 금요일 (2일 전)
-        days_back = 2
-    elif dt.weekday() == 5:  # 토요일 -> 지난주 금요일 (1일 전)
-        days_back = 1
-    else:                    # 화~금 장전/새벽 -> 전일 (1일 전)
-        days_back = 1
+    # 2. 어제 또는 그 이전 날짜 중 최신 마감 영업일 탐색
+    d = today - datetime.timedelta(days=1)
+    for _ in range(60):
+        # d가 미국 거래일인 경우: KST 익일 06:00 이후 공식 마감
+        if is_us_trading_day(d):
+            if d == (today - datetime.timedelta(days=1)) and now_kst.hour < 6:
+                if is_krx_trading_day(d):
+                    return d.strftime("%Y-%m-%d")
+            else:
+                return d.strftime("%Y-%m-%d")
+        elif is_krx_trading_day(d):
+            return d.strftime("%Y-%m-%d")
+        d -= datetime.timedelta(days=1)
 
-    return (dt - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    return (today - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 # 페이지 설정
@@ -652,8 +721,8 @@ if run_button or st.session_state.get('need_run', False) or 'data_loaded' not in
         st.info("비교할 종목 또는 지수를 왼쪽 사이드바에서 선택하거나 입력한 뒤 [조회하기] 버튼을 눌러주세요.")
     else:
         # 데이터 수집
-        data_dict = {}
-        original_data_dict = {}
+        raw_data_dict = {}
+        meta_dict = {}
         
         with st.spinner("금융 데이터를 가져오는 중입니다..."):
             # yfinance는 end가 exclusive이므로 1일을 더해줍니다.
@@ -663,6 +732,7 @@ if run_button or st.session_state.get('need_run', False) or 'data_loaded' not in
                 try:
                     is_kr_stock = ticker.endswith('.KS') or ticker.endswith('.KQ')
                     is_kr_index = ticker in ['^KS11', '^KQ11']
+                    is_kr = is_kr_stock or is_kr_index
                     
                     if is_kr_stock:
                         code = ticker.replace('.KS', '').replace('.KQ', '')
@@ -690,19 +760,57 @@ if run_button or st.session_state.get('need_run', False) or 'data_loaded' not in
                         st.warning(f"⚠️ '{display_name}' ({ticker})의 유효한 종가 데이터가 없습니다.")
                         continue
                         
-                    # 데이터 저장
-                    original_data_dict[display_name] = (series, ticker)
-                    
-                    # 시작일 기준 100% 정규화
-                    start_price = series.iloc[0]
-                    series_normalized = (series / start_price) * 100
-                    data_dict[display_name] = series_normalized
+                    raw_data_dict[display_name] = series
+                    meta_dict[display_name] = {'ticker': ticker, 'is_kr': is_kr, 'category': category}
                     
                 except Exception as e:
                     st.error(f"❌ '{display_name}' ({ticker}) 데이터를 가져오는 도중 에러 발생: {e}")
 
         # 로드된 데이터가 하나라도 있는 경우 화면 표시
-        if data_dict:
+        if raw_data_dict:
+            # [교차 시장 시계열 병합 및 결측 보정]
+            # 1. 공통 캘린더 생성 (양국 중 최소 한 곳이라도 거래된 날 보존)
+            combined_df = pd.DataFrame(raw_data_dict)
+            combined_df = combined_df.dropna(how='all')
+            combined_df.sort_index(inplace=True)
+            
+            # 2. ffill 적용 전 결측(휴장) 여부 플래깅
+            holiday_flags = {}
+            for col in combined_df.columns:
+                holiday_flags[col] = combined_df[col].isna()
+                
+            # 3. 휴장일 직전 종가 순방향 유지 (Forward Fill)
+            combined_df_filled = combined_df.ffill()
+            
+            # 각 자산별 정규화(시작가=100%) 데이터 및 플롯 트레이스 생성
+            data_dict = {}
+            hover_dict = {}
+            for display_name in combined_df.columns:
+                m_info = meta_dict[display_name]
+                tk = m_info['ticker']
+                is_kr = m_info['is_kr']
+                
+                valid_first_idx = combined_df[display_name].first_valid_index()
+                if valid_first_idx is None:
+                    continue
+                start_price = combined_df.loc[valid_first_idx, display_name]
+                if start_price <= 0:
+                    continue
+                
+                s_filled = combined_df_filled.loc[valid_first_idx:, display_name]
+                norm_series = (s_filled / start_price) * 100.0
+                data_dict[display_name] = norm_series
+                
+                # 맞춤형 호버 텍스트 생성
+                hover_texts = []
+                for dt_idx, val in norm_series.items():
+                    raw_price = s_filled.loc[dt_idx]
+                    price_str = format_price(raw_price, tk)
+                    is_h = bool(holiday_flags[display_name].get(dt_idx, False))
+                    h_tag = " [국내 휴장, 직전 종가]" if (is_h and is_kr) else (" [미국 휴장, 직전 종가]" if (is_h and not is_kr) else "")
+                    hover_texts.append(f"{dt_idx.strftime('%Y-%m-%d')}<br><b>{display_name}</b>: {val:.2f}% ({price_str}){h_tag}")
+                hover_dict[display_name] = hover_texts
+            
             col1, col2 = st.columns([3, 1])
             
             # --- 차트 그리기 (Plotly) ---
@@ -711,16 +819,18 @@ if run_button or st.session_state.get('need_run', False) or 'data_loaded' not in
             chart_colors = ['#38BDF8', '#F43F5E', '#10B981', '#FBBF24', '#A855F7', '#EC4899', '#6366F1']
             for i, (display_name, series_normalized) in enumerate(data_dict.items()):
                 c = chart_colors[i % len(chart_colors)]
+                h_texts = hover_dict.get(display_name, [])
                 fig.add_trace(go.Scatter(
                     x=series_normalized.index,
                     y=series_normalized.values,
                     mode='lines',
                     name=display_name,
                     line=dict(width=2.5, color=c),
-                    hovertemplate='%{x|%Y-%m-%d}<br><b>' + display_name + '</b>: %{y:.2f}%<extra></extra>'
+                    hovertext=h_texts,
+                    hoverinfo='text'
                 ))
             
-            # 우측 Y축(yaxis2) 활성화를 위한 투명 더미 트레이스 추가 (Plotly 특성상 해당 축에 트레이스가 바인딩되어야 렌더링됨)
+            # 우측 Y축(yaxis2) 활성화를 위한 투명 더미 트레이스 추가
             fig.add_trace(go.Scatter(
                 x=[None],
                 y=[None],
@@ -784,8 +894,8 @@ if run_button or st.session_state.get('need_run', False) or 'data_loaded' not in
                     family="Pretendard, Malgun Gothic, -apple-system, sans-serif",
                     color="#E2E8F0"
                 ),
-                plot_bgcolor=STANDARD_CHART_THEME['plot_bgcolor'],   # 고대비 Tailwind Slate-900 딥 블랙 플롯 영역
-                paper_bgcolor=STANDARD_CHART_THEME['paper_bgcolor'],  # 고대비 Tailwind Slate-800 카드 페이퍼 영역
+                plot_bgcolor=STANDARD_CHART_THEME['plot_bgcolor'],
+                paper_bgcolor=STANDARD_CHART_THEME['paper_bgcolor'],
                 margin=dict(l=50, r=50, t=40, b=40),
                 height=550
             )
@@ -798,6 +908,7 @@ if run_button or st.session_state.get('need_run', False) or 'data_loaded' not in
                 unsafe_allow_html=True
             )
             st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.caption("💡 **공휴일 데이터 처리 안내**: 한국 또는 미국 한쪽 시장만 휴장인 경우(예: 추석 연휴 등), 휴장 시장은 직전 거래일 종가가 유지(Forward Fill)되어 양국 자산의 시계열 및 수익률이 공정하고 연속적으로 비교됩니다.")
             
             # --- 요약 분석 표 생성 ---
             st.markdown(
@@ -808,25 +919,36 @@ if run_button or st.session_state.get('need_run', False) or 'data_loaded' not in
             )
             
             summary_rows = []
-            for display_name, (series, ticker) in original_data_dict.items():
-                start_val = series.iloc[0]
-                end_val = series.iloc[-1]
+            for display_name in combined_df.columns:
+                m_info = meta_dict.get(display_name, {})
+                ticker = m_info.get('ticker', '')
+                is_kr = m_info.get('is_kr', False)
                 
-                # 누적 수익률 계산
+                raw_s = combined_df[display_name].dropna()
+                if raw_s.empty:
+                    continue
+                start_val = raw_s.iloc[0]
+                actual_latest_date = raw_s.index[-1]
+                
+                # ffill된 최종값 (공통 최종 기준일 시점의 유효가)
+                end_val = combined_df_filled[display_name].iloc[-1]
                 total_return = ((end_val - start_val) / start_val) * 100
                 
-                # 기간 내 최고/최저가 및 그에 대응하는 누적수익률
-                max_val = series.max()
-                min_val = series.min()
-                
+                max_val = raw_s.max()
+                min_val = raw_s.min()
                 max_return = ((max_val - start_val) / start_val) * 100
                 min_return = ((min_val - start_val) / start_val) * 100
+                
+                is_latest_holiday = bool(holiday_flags[display_name].iloc[-1])
+                h_suffix = " (국내 휴장)" if (is_latest_holiday and is_kr) else (" (미국 휴장)" if (is_latest_holiday and not is_kr) else "")
+                date_display = f"{actual_latest_date.strftime('%Y-%m-%d')}{h_suffix}"
                 
                 summary_rows.append({
                     "종목/지수명": display_name,
                     "티커": ticker,
                     "시작 가격": format_price(start_val, ticker),
                     "최종 가격": format_price(end_val, ticker),
+                    "최종 기준일": date_display,
                     "최종 수익률": total_return,
                     "기간 최고 수익률": max_return,
                     "기간 최저 수익률": min_return
@@ -834,8 +956,6 @@ if run_button or st.session_state.get('need_run', False) or 'data_loaded' not in
             
             summary_df = pd.DataFrame(summary_rows)
             
-            # 스타일링 적용 및 출력
-            # 누적 수익률 값을 보기 좋은 포맷의 텍스트로 변환
             styled_df = summary_df.copy()
             styled_df["최종 수익률"] = styled_df["최종 수익률"].apply(format_return)
             styled_df["기간 최고 수익률"] = styled_df["기간 최고 수익률"].apply(format_return)

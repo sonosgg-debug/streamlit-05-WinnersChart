@@ -8,6 +8,8 @@ import FinanceDataReader as fdr
 import datetime
 import plotly.graph_objects as go
 import os
+import requests
+import xml.etree.ElementTree as ET
 
 STANDARD_CHART_THEME = {
     'paper_bgcolor': '#1E293B',    # Tailwind Slate-800 (외곽 카드 배경)
@@ -472,6 +474,68 @@ def resolve_stock_selection(selected_display, krx_df):
     # 그 외 직접 입력된 텍스트 처리
     return resolve_ticker(selected_display, krx_df)
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_kr_index_data(ticker: str, start_date, end_date) -> pd.DataFrame:
+    """
+    KOSPI(^KS11) 및 KOSDAQ(^KQ11) 지수 데이터를 실시간 수집합니다.
+    FinanceDataReader의 'KS11'/'KQ11' 정적 캐시가 과거 특정 일자 이후 중단되는 결함을 방어하기 위해
+    1순위: 네이버 금융 fchart API (실시간 최신 공식 확정 종가)
+    2순위: yfinance history (^KS11, ^KQ11)
+    3순위: FinanceDataReader
+    순으로 다중 계층 안전 폴백을 적용합니다.
+    """
+    symbol = 'KOSPI' if ticker in ['^KS11', 'KS11', 'KOSPI'] else ('KOSDAQ' if ticker in ['^KQ11', 'KQ11', 'KOSDAQ'] else ticker)
+    
+    # 1순위: 네이버 금융 공식 차트 API (실시간 일별 시세)
+    try:
+        url = f"https://fchart.stock.naver.com/sise.nhn?symbol={symbol}&timeframe=day&count=6000&requestType=0"
+        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        if r.status_code == 200 and r.text:
+            root = ET.fromstring(r.text)
+            rows = []
+            for item in root.findall('.//item'):
+                data_attr = item.get('data', '')
+                parts = data_attr.split('|')
+                if len(parts) >= 5:
+                    rows.append({
+                        'Date': datetime.datetime.strptime(parts[0], '%Y%m%d'),
+                        'Open': float(parts[1]),
+                        'High': float(parts[2]),
+                        'Low': float(parts[3]),
+                        'Close': float(parts[4]),
+                        'Volume': float(parts[5]) if len(parts) > 5 else 0.0
+                    })
+            if rows:
+                df = pd.DataFrame(rows).set_index('Date').sort_index()
+                s_dt = pd.to_datetime(start_date)
+                e_dt = pd.to_datetime(end_date)
+                df_filtered = df.loc[(df.index >= s_dt) & (df.index <= e_dt)]
+                if not df_filtered.empty:
+                    return df_filtered
+    except Exception as e_naver:
+        print(f"[fetch_kr_index_data] 네이버 지수 API 조회 실패: {e_naver}")
+
+    # 2순위: yfinance history 폴백
+    try:
+        yf_sym = '^KS11' if symbol == 'KOSPI' else '^KQ11'
+        yf_end = (pd.to_datetime(end_date) + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+        df_yf = yf.Ticker(yf_sym).history(start=str(start_date)[:10], end=yf_end)
+        if df_yf is not None and not df_yf.empty and 'Close' in df_yf.columns:
+            return df_yf
+    except Exception as e_yf:
+        print(f"[fetch_kr_index_data] yfinance 지수 조회 실패: {e_yf}")
+
+    # 3순위: FinanceDataReader 폴백
+    try:
+        fdr_code = 'KS11' if symbol == 'KOSPI' else 'KQ11'
+        df_fdr = fdr.DataReader(fdr_code, start_date, end_date)
+        if df_fdr is not None and not df_fdr.empty:
+            return df_fdr
+    except Exception as e_fdr:
+        print(f"[fetch_kr_index_data] FinanceDataReader 지수 조회 실패: {e_fdr}")
+
+    return pd.DataFrame()
+
 def format_price(value, ticker):
     """자산 종류에 맞게 화폐 단위 및 가격을 포맷팅합니다."""
     if ticker.startswith('^'):
@@ -737,9 +801,11 @@ if run_button or st.session_state.get('need_run', False) or 'data_loaded' not in
                     if is_kr_stock:
                         code = ticker.replace('.KS', '').replace('.KQ', '')
                         df = fdr.DataReader(code, start_date, yf_end_date)
+                        if df is None or df.empty:
+                            t_obj = yf.Ticker(ticker)
+                            df = t_obj.history(start=start_date, end=yf_end_date)
                     elif is_kr_index:
-                        fdr_code = 'KS11' if ticker == '^KS11' else 'KQ11'
-                        df = fdr.DataReader(fdr_code, start_date, yf_end_date)
+                        df = fetch_kr_index_data(ticker, start_date, yf_end_date)
                     else:
                         t_obj = yf.Ticker(ticker)
                         df = t_obj.history(start=start_date, end=yf_end_date)

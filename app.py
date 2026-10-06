@@ -1,5 +1,3 @@
-import socket
-socket.setdefaulttimeout(15.0)
 
 import streamlit as st
 import pandas as pd
@@ -126,7 +124,6 @@ def get_latest_expected_trading_day(target_date: str = None) -> str:
         d -= datetime.timedelta(days=1)
 
     return (today - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-
 
 # 페이지 설정
 st.set_page_config(
@@ -331,7 +328,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
 # 제목 및 소개
 st.markdown("<h1 class='main-title' style='text-align: center; font-size: 2.0rem !important; font-weight: 800 !important; color: #8AB4F8 !important; -webkit-text-fill-color: #8AB4F8 !important; margin-bottom: 10px;'><span style='color: #8AB4F8 !important; -webkit-text-fill-color: #8AB4F8 !important;'>국내외 주식 & 지수 수익률 비교</span></h1>", unsafe_allow_html=True)
 st.markdown("""
@@ -347,7 +343,7 @@ st.markdown("<hr style='border: 0; height: 1px; background-color: #334155; margi
 @st.cache_data(ttl=86400)  # 24시간 동안 캐시 유지
 def load_krx_data():
     """KRX 종목 목록을 가져와서 코드가 포함된 데이터프레임을 반환합니다."""
-    cache_file = "krx_cache.csv"
+    cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "krx_cache.csv")
     try:
         # 실시간 데이터 로드 시도
         df = fdr.StockListing('KRX')

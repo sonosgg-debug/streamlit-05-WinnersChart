@@ -1,5 +1,29 @@
+import sys
+# Python 3.12+ 및 Streamlit Cloud 환경에서 pkg_resources 의존성 결함 방어용 Mock Shim
+try:
+    import pkg_resources
+except Exception:
+    try:
+        import setuptools.command
+        import pkg_resources
+    except Exception:
+        import types
+        pkg_mock = types.ModuleType("pkg_resources")
+        pkg_mock.resource_filename = lambda *args, **kwargs: ""
+        pkg_mock.resource_string = lambda *args, **kwargs: b""
+        pkg_mock.Requirement = type("Requirement", (), {"parse": lambda s: s})
+        pkg_mock.get_distribution = lambda *args, **kwargs: type("Dist", (), {"version": "1.0.0"})()
+        sys.modules["pkg_resources"] = pkg_mock
 
 import streamlit as st
+
+# [가이드 05] Streamlit 명령 최우선 실행 보장 (StreamlitAPIException 및 무한 로딩 방어)
+st.set_page_config(
+    page_title="주식 & 지수 수익률 비교",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 import pandas as pd
 import yfinance as yf
 import FinanceDataReader as fdr
@@ -124,13 +148,6 @@ def get_latest_expected_trading_day(target_date: str = None) -> str:
         d -= datetime.timedelta(days=1)
 
     return (today - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-
-# 페이지 설정
-st.set_page_config(
-    page_title="주식 & 지수 수익률 비교",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # 사이드바 접기/펼치기 버튼 상시 표시 및 모바일 대비 강화 CSS
 st.markdown("""
